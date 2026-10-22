@@ -464,17 +464,34 @@ function speak(text,o={}){return new Promise(res=>{
  u.onend=fin;u.onerror=fin;const t=setTimeout(fin,1500+text.length*100/u.rate);
  speechSynthesis.speak(u);});}
 function stopAudio(){playTok++;if(TTS.ok)speechSynthesis.cancel();}
+function stopAll(){stopAudio();if(typeof listenStop==="function")listenStop();}
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 
 /* ---------------- SPEECH IN ---------------- */
 const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
-let rec=null;
+/* iOS Safari often never fires "onend" after you finish speaking, so we never wait on it alone:
+   - stop after ~1.4s of silence once words are heard
+   - stop as soon as a final result arrives
+   - hard stop after 8s no matter what
+   - tapping the mic again stops it (listenStop) */
+let rec=null,listenStop=null;
 function listen(){return new Promise((res,rej)=>{
- try{if(rec)rec.abort();}catch(e){}
- const r=new SR();rec=r;r.lang=S.settings.accent==="spain"?"es-ES":"es-MX";r.interimResults=false;r.maxAlternatives=5;r.continuous=false;
- let got=[];r.onresult=e=>{got=Array.from(e.results[0]).map(a=>a.transcript);};
- r.onerror=e=>rej(e.error||"error");r.onend=()=>res(got);
- try{r.start();}catch(e){rej("start");}
+ if(listenStop)listenStop();
+ const r=new SR();rec=r;r.lang=S.settings.accent==="spain"?"es-ES":"es-MX";r.interimResults=true;r.maxAlternatives=5;r.continuous=false;
+ let got=[],settled=false,quiet=null;
+ const finish=err=>{if(settled)return;settled=true;clearTimeout(hard);clearTimeout(quiet);listenStop=null;rec=null;
+  try{r.onresult=r.onerror=r.onend=null;r.abort();}catch(e){}
+  if(err&&!got.length)rej(err);else res(got);};
+ const hard=setTimeout(()=>finish(),8000);
+ r.onresult=e=>{const last=e.results[e.results.length-1];
+  const txt=Array.from(e.results).map(x=>x[0].transcript).join(" ").trim();
+  got=last.isFinal?[txt,...Array.from(last).slice(1).map(a=>a.transcript)]:[txt];
+  clearTimeout(quiet);
+  if(last.isFinal)finish();else quiet=setTimeout(()=>finish(),1400);};
+ r.onerror=e=>finish(e.error||"error");
+ r.onend=()=>finish();
+ listenStop=()=>finish();
+ try{r.start();}catch(e){finish("start");}
 });}
 function norm(s){return s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g,"").replace(/[^a-z0-9\s]/g," ").replace(/\s+/g," ").trim();}
 function lev(a,b){const m=a.length,n=b.length,d=Array.from({length:m+1},(_,i)=>[i]);for(let j=1;j<=n;j++)d[0][j]=j;
@@ -534,7 +551,7 @@ function startSession(mode,unitId,extra){
  ui.session={mode,unitId,steps,i:0,revealed:false,fb:null,played:false,st:{learned:0,rev:0,spoken:0,again:0}};
  go("session");
 }
-function stepNext(){const s=ui.session;s.i++;s.revealed=false;s.fb=null;s.played=false;
+function stepNext(){stopAll();const s=ui.session;s.i++;s.revealed=false;s.fb=null;s.played=false;
  if(s.i>=s.steps.length){if(s.mode==="daily")S.doneDay=dkey();save();}
  render();}
 
@@ -693,7 +710,7 @@ function vDone(){const s=ui.session,t=s.st;const st=streakNow();
  </main><footer class="sfoot"><button class="btn btn-soft" data-act="dlg" data-arg="${(s.unitId)||(nextUnit()||UNITS[0]).id}" data-from="today">Open a dialogue</button><button class="btn btn-primary" data-act="home">Back home</button></footer></div>`;}
 
 /* ---------------- RENDER ---------------- */
-function go(v){stopAudio();if(v!=="dialog"){ui.dl.playing=-1;ui.dl.rp=null;}ui.view=v;render();window.scrollTo(0,0);}
+function go(v){stopAll();if(v!=="dialog"){ui.dl.playing=-1;ui.dl.rp=null;}ui.view=v;render();window.scrollTo(0,0);}
 function render(){
  const V={today:vToday,learn:vLearn,unit:vUnit,listen:vListen,dialog:vDialog,me:vMe,session:vSession,onboard:vOnboard}[ui.view]||vToday;
  $("#app").innerHTML=V();
@@ -715,7 +732,9 @@ async function rpStep(){const d=UBYID[ui.dlg].d,rp=ui.dl.rp;if(!rp)return;
 
 /* ---------------- EVENTS ---------------- */
 async function runMic(btn,target,onResult){
- stopAudio();btn.classList.add("rec");const lbl=btn.lastChild;const old=lbl.textContent;lbl.textContent="Listening…";
+ if(listenStop){listenStop();return;} /* second tap = "I'm done" */
+ stopAudio();await sleep(150); /* let the speaker release the audio session (iOS) */
+ btn.classList.add("rec");const lbl=btn.lastChild;const old=lbl.textContent;lbl.textContent="Listening… tap to stop";
  try{const alts=await listen();btn.classList.remove("rec");lbl.textContent=old;
   if(!alts.length){onResult({cls:"info",html:micError("no-speech"),score:0});return;}
   hist().spoken++;markActive();save();onResult(feedbackHTML(target,alts));}
@@ -738,21 +757,21 @@ document.addEventListener("click",async e=>{
  case"mic":{const p=BYID[arg];runMic(b,p.es,r=>{s.fb=r;if(r.score>0)s.st.spoken++;
    if(s.steps[s.i].t==="recall"&&!s.revealed&&r.score>=60){s.revealed=true;render();speak(p.es);}else{const f=$("#fb");if(f){f.className="fb show "+r.cls;f.innerHTML=r.html;}}});break;}
  case"gotit":{const st=s.steps[s.i];if(s.mode!=="practice"){newCard(st.id);s.st.learned++;save();}stepNext();break;}
- case"reveal":s.revealed=true;render();speak(BYID[s.steps[s.i].id].es);break;
+ case"reveal":stopAll();s.revealed=true;render();speak(BYID[s.steps[s.i].id].es);break;
  case"grade":{const g=+arg,st=s.steps[s.i];
   if(s.mode!=="practice"&&S.cards[st.id]){applyGrade(st.id,g);hist().rev++;markActive();save();}
   s.st.rev++;if(g===0){s.st.again++;s.steps.splice(Math.min(s.i+4,s.steps.length),0,{t:"recall",id:st.id});}
   stepNext();break;}
- case"quit":stopAudio();if(s&&s.i>0&&s.i<s.steps.length&&!confirm("End this session? Your progress so far is saved."))return;go("today");break;
+ case"quit":stopAll();if(s&&s.i>0&&s.i<s.steps.length&&!confirm("End this session? Your progress so far is saved."))return;go("today");break;
  case"en":ui.dl.en=!ui.dl.en;render();break;
  case"slowtoggle":S.settings.rate=S.settings.rate<0.8?0.9:0.7;save();render();toast(S.settings.rate<0.8?"Slow speech on":"Normal speed");break;
  case"line":stopAudio();ui.dl.playing=+arg;render();{const tok=playTok;await sayLine(UBYID[ui.dlg].d.l[+arg]);if(tok===playTok){ui.dl.playing=-1;render();}}break;
  case"playdlg":playDialog(0);break;
  case"stopdlg":stopAudio();ui.dl.playing=-1;render();break;
  case"rpstart":stopAudio();ui.dl.playing=-1;ui.dl.rp={me:arg,i:0,revealed:false,fb:null,done:false};rpStep();break;
- case"rpexit":stopAudio();ui.dl.rp=null;render();break;
- case"rpreveal":{const rp=ui.dl.rp;rp.revealed=true;render();sayLine(UBYID[ui.dlg].d.l[rp.i]);break;}
- case"rpnext":{stopAudio();const rp=ui.dl.rp;rp.i++;rpStep();break;}
+ case"rpexit":stopAll();ui.dl.rp=null;render();break;
+ case"rpreveal":{stopAll();const rp=ui.dl.rp;rp.revealed=true;render();sayLine(UBYID[ui.dlg].d.l[rp.i]);break;}
+ case"rpnext":{stopAll();const rp=ui.dl.rp;rp.i++;rpStep();break;}
  case"rpmic":{const rp=ui.dl.rp,L=UBYID[ui.dlg].d.l[rp.i];runMic(b,L[1],r=>{rp.fb=r;if(r.score>=60)rp.revealed=true;render();if(rp.revealed)sayLine(L);});break;}
  case"accent":S.settings.accent=arg;S.settings.voice="";save();render();speak(arg==="spain"?"¡Hola! ¿Qué tal?":"¡Hola! ¿Cómo estás?");break;
  case"newper":S.settings.newPerDay=+arg;save();render();break;
@@ -769,7 +788,7 @@ document.addEventListener("change",e=>{
  if(e.target.id==="importFile"){const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=()=>{try{const d=JSON.parse(r.result);if(!d.cards)throw 0;S=Object.assign(clone(DEF),d);save();render();toast("Progress restored");}catch(x){toast("That file isn't a Hablemos backup.");}};r.readAsText(f);}
 });
 document.addEventListener("input",e=>{if(e.target.id==="rate"){const l=$("#rateLbl");if(l)l.textContent=(+e.target.value).toFixed(2)+"×";}});
-document.addEventListener("visibilitychange",()=>{if(document.hidden)stopAudio();else if(ui.view==="today")render();});
+document.addEventListener("visibilitychange",()=>{if(document.hidden)stopAll();else if(ui.view==="today")render();});
 
 render();
 if("serviceWorker" in navigator&&location.protocol==="https:")navigator.serviceWorker.register("sw.js").catch(()=>{});
