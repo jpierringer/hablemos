@@ -179,6 +179,20 @@ input[type=range]{accent-color:var(--accent);height:30px}
 .ob h1{font-size:36px;line-height:1.05}
 .ob p{margin:0;color:var(--muted)}
 .ob .grow{flex:1}
+/* street ready */
+.ready-card{display:flex;align-items:center;gap:14px;width:100%;text-align:left;padding:14px}
+.rc-t{font-family:var(--display);font-size:22px;font-weight:700;line-height:1.1}
+.gauge{--g-track:var(--surface2);--g-fill:var(--accent);flex:none}
+.ready-hero{display:flex;flex-direction:column;align-items:center;text-align:center;gap:4px}
+.rh-t{font-family:var(--display);font-size:28px;font-weight:700;margin-top:6px}
+.rust{margin-top:10px;background:var(--bad-soft);border-radius:12px;padding:8px 12px;font-size:14px}
+.part{margin-bottom:14px}.pk{display:flex;justify-content:space-between;gap:8px}.pk span{color:var(--muted);font-size:14px}.pd{color:var(--muted);font-size:13px;margin-top:4px}
+.passport{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:16px}
+.stamp{aspect-ratio:1;border-radius:50%;border:2px dashed var(--line);display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--muted);opacity:.75;padding:8px;text-align:center}
+.stamp .sn{font-family:var(--display);font-weight:700;font-size:22px;line-height:1}
+.stamp .st{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;line-height:1.15;margin-top:3px}
+.stamp .sd{font-size:10px;margin-top:2px;font-weight:500}
+.stamp.on{border:4px double var(--accent);color:var(--accent);opacity:1;transform:rotate(var(--rot));background:var(--accent-soft)}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 </style>
 </head>
@@ -408,6 +422,8 @@ const UNITS=[
 const ALL=[];const BYID={};
 UNITS.forEach((u,ui)=>u.p.forEach((p,i)=>{const o={id:u.id+"-"+i,unit:u.id,ui,es:p[0],en:p[1],note:p[2]||""};ALL.push(o);BYID[o.id]=o;}));
 const UBYID=Object.fromEntries(UNITS.map(u=>[u.id,u]));
+const SIT={u1:"Meeting someone new",u2:"When you're lost",u3:"Making plans",u4:"Hotel & favors",u5:"Weekend plans",u6:"Busy days",u7:"Small talk",u8:"Getting around",u9:"Restaurant",u10:"Catching up",u11:"Deciding together",u12:"Hanging out"};
+UNITS.forEach(u=>u.sit=SIT[u.id]);
 
 /* ---------------- ICONS ---------------- */
 const IC={
@@ -428,7 +444,7 @@ const IC={
 
 /* ---------------- STORAGE ---------------- */
 const KEY="hablemos.v1";
-const DEF={settings:{accent:"latam",rate:0.9,newPerDay:5,voice:""},cards:{},streak:{n:0,last:""},hist:{},onboarded:false,doneDay:""};
+const DEF={settings:{accent:"latam",rate:0.9,newPerDay:5,voice:""},cards:{},streak:{n:0,last:""},hist:{},onboarded:false,doneDay:"",stamps:{}};
 function clone(o){return JSON.parse(JSON.stringify(o))}
 function load(){try{const r=localStorage.getItem(KEY);if(r){const d=JSON.parse(r);return Object.assign(clone(DEF),d,{settings:Object.assign(clone(DEF.settings),d.settings||{})});}}catch(e){}return clone(DEF);}
 let S=load();
@@ -523,6 +539,38 @@ const unseen=()=>ALL.filter(p=>!S.cards[p.id]);
 const newLeftToday=()=>Math.max(0,S.settings.newPerDay-(S.hist[dkey()]?.learned||0));
 function revType(p){const c=S.cards[p.id];return(c.reps%3===1)?"listen":"recall";}
 
+/* ---------------- STREET READY ----------------
+   Per situation (unit), four parts, each 0–1:
+   recall = how long phrases survive between reviews (21+ day gap = full)
+   pron   = recent mic scores        speed = time to start answering (≤2.5s full, ≥10s zero)
+   comp   = listening cards (60%) + passport stamp (40%)
+   Missing days add "rust", a multiplier down to 0.6 that one session clears. */
+const W={rec:.35,pron:.25,spd:.25,comp:.15};
+const PARTS=[["rec","Recall","Phrases that survive longer and longer gaps between reviews"],["pron","Pronunciation","Your recent mic scores"],["spd","Speed","How fast you start answering. Real conversation gives you about 2 seconds"],["comp","Comprehension","Listening cards plus passport stamps"]];
+const TIPS={rec:"Do your daily session. Phrases get stronger every time they survive a longer gap.",pron:"Tap the mic on your reviews. Every spoken check feeds this score.",spd:"Start speaking within 3 seconds, even if you open with “pues…”. Speed is what turns phrases into conversation.",comp:"Earn passport stamps: role-play a dialogue with English off and no peeking."};
+const TIERS=[[0,"Tourist","Pointing and smiling"],[20,"Survivor","You can get what you need"],[40,"Getting by","Simple conversations, slowly"],[60,"Conversational","You can hold your own"],[80,"Street ready","Bring on the real world"]];
+const ema=(o,v)=>o==null?v:Math.round((o*0.6+v*0.4)*100)/100;
+const avg=a=>a.length?a.reduce((x,y)=>x+y,0)/a.length:0;
+const speedVal=ms=>Math.max(0,Math.min(1,(10000-ms)/7500));
+function hasPron(){return Object.values(S.cards).some(c=>c.ms!=null);}
+function rust(){if(!S.streak.last)return 1;const d=Math.round((sod()-sod(new Date(S.streak.last+"T12:00:00").getTime()))/DAY);return d<=1?1:Math.max(.6,1-.04*(d-1));}
+function combine(parts){const hp=hasPron();let t=0,w=0;for(const k in W){if(k==="pron"&&!hp)continue;t+=parts[k]*W[k];w+=W[k];}return Math.round(100*t/w*rust());}
+function unitReady(u){const cs=ALL.filter(p=>p.unit===u.id).map(p=>S.cards[p.id]);
+ const parts={rec:avg(cs.map(c=>c?Math.sqrt(Math.min(1,c.ivl/21)):0)),
+  pron:avg(cs.map(c=>c&&c.ms!=null?c.ms/100:0)),
+  spd:avg(cs.map(c=>c&&c.lt!=null?speedVal(c.lt):0)),
+  comp:.6*avg(cs.map(c=>c&&c.lc!=null?c.lc:0))+.4*(S.stamps[u.id]?1:0)};
+ return{parts,score:combine(parts)};}
+function ready(){const us=UNITS.map(unitReady);const parts={};for(const k in W)parts[k]=avg(us.map(u=>u.parts[k]));return{parts,score:combine(parts),units:us};}
+function tier(sc){return TIERS.filter(t=>sc>=t[0]).pop();}
+function weakest(parts){const hp=hasPron();return Object.keys(W).filter(k=>k!=="pron"||hp).sort((a,b)=>parts[a]*W[a]-parts[b]*W[b]||parts[a]-parts[b])[0];}
+function gauge(score,size=132){const sw=Math.max(5,Math.round(size*.09)),r=size/2-sw/2-2,c=2*Math.PI*r,h=size/2;
+ return`<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" class="gauge" aria-label="Street Ready ${score} of 100"><circle cx="${h}" cy="${h}" r="${r}" fill="none" stroke="var(--g-track)" stroke-width="${sw}"/><circle cx="${h}" cy="${h}" r="${r}" fill="none" stroke="var(--g-fill)" stroke-width="${sw}" stroke-linecap="round" stroke-dasharray="${c.toFixed(1)}" stroke-dashoffset="${(c*(1-Math.max(score,.5)/100)).toFixed(1)}" transform="rotate(-90 ${h} ${h})"/><text x="50%" y="50%" text-anchor="middle" dominant-baseline="central" font-family="Fraunces,Georgia,serif" font-weight="700" font-size="${Math.round(size*.3)}" fill="currentColor">${score}</text></svg>`;}
+function judgeStamp(rp){const a=avg(Object.values(rp.ls));
+ rp.why=rp.en?"English was on":rp.peeks?(SR?`you peeked ${rp.peeks}×`:`you missed ${rp.peeks}`):(SR&&a<70)?`pronunciation averaged ${Math.round(a)}% (need 70%)`:"";
+ rp.earned=!rp.why;
+ if(rp.earned){rp.newStamp=!S.stamps[ui.dlg];S.stamps[ui.dlg]={d:dkey(),avg:Math.round(a)};markActive();save();}}
+
 /* ---------------- UI STATE ---------------- */
 const ui={view:S.onboarded?"today":"onboard",unit:null,dlg:null,from:"learn",session:null,dl:{en:false,playing:-1,rp:null}};
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
@@ -548,7 +596,7 @@ function startSession(mode,unitId,extra){
   ps.forEach((p,k)=>steps.push({t:k%3===2?"listen":"recall",id:p.id}));
  }
  if(!steps.length){toast("Nothing to do here right now.");return;}
- ui.session={mode,unitId,steps,i:0,revealed:false,fb:null,played:false,st:{learned:0,rev:0,spoken:0,again:0}};
+ ui.session={mode,unitId,steps,i:0,revealed:false,fb:null,played:false,st:{learned:0,rev:0,spoken:0,again:0}};ui.session.before=ready().score;
  go("session");
 }
 function stepNext(){stopAll();const s=ui.session;s.i++;s.revealed=false;s.fb=null;s.played=false;
@@ -560,7 +608,7 @@ function greet(){const h=new Date().getHours();return h<12?["Buenos días","Good
 function nextUnit(){return UNITS.find(u=>ALL.some(p=>p.unit===u.id&&!S.cards[p.id]));}
 function unitProg(u){const n=ALL.filter(p=>p.unit===u.id&&S.cards[p.id]).length;return[n,u.p.length];}
 function tabbar(){const t=[["today","Today",IC.home],["learn","Learn",IC.book],["listen","Listen",IC.ear],["me","Progress",IC.me]];
- const act=ui.view==="unit"?"learn":ui.view==="dialog"?ui.from:ui.view;
+ const act=ui.view==="unit"?"learn":ui.view==="ready"?"today":ui.view==="dialog"?(ui.from==="ready"?"today":ui.from):ui.view;
  return`<div class="tabbar"><nav>${t.map(([v,l,i])=>`<button data-act="nav" data-arg="${v}" class="${act===v?"on":""}">${i}${l}</button>`).join("")}</nav></div>`;}
 
 function vToday(){
@@ -579,11 +627,28 @@ function vToday(){
  <div class="hello"><div><h1>${g}</h1><small>${ge} · ${new Date().toLocaleDateString(undefined,{weekday:"long",month:"short",day:"numeric"})}</small></div>
  <span class="pill"><span class="flame">●</span>${st} day${st===1?"":"s"}</span></div>
  ${hero}
+ ${readyCard()}
  ${nx?`<div class="label">Up next</div>
  <button class="list-item" data-act="unit" data-arg="${nx.id}"><span class="num">${UNITS.indexOf(nx)+1}</span><span class="grow"><div class="t">${esc(nx.title)}</div><div class="s">${esc(nx.sub)}</div><div class="mini"><i style="width:${unitProg(nx)[0]/nx.p.length*100}%"></i></div></span><span class="chev">${IC.chev}</span></button>`:""}
  <div class="label">Listening practice</div>
  <button class="list-item" data-act="dlg" data-arg="${dlgU.id}" data-from="today"><span class="num" style="background:var(--teal-soft);color:var(--teal)">${IC.bubble.replace("<svg",'<svg width="20" height="20"')}</span><span class="grow"><div class="t">${esc(dlgU.d.title)}</div><div class="s">Dialogue · listen, then role-play</div></span><span class="chev">${IC.chev}</span></button>
  <div class="tip" style="margin-top:14px"><b>Today's habit:</b> say every phrase <b>out loud</b>, even when you're just reviewing. Speaking is a physical skill — your mouth needs the reps.</div>
+ </div>${tabbar()}`;}
+
+function readyCard(){const R=ready(),t=tier(R.score),ru=rust();
+ return`<button class="card ready-card" data-act="nav" data-arg="ready">${gauge(R.score,84)}<span class="grow"><div class="label" style="margin:0 0 2px">Street Ready</div><div class="rc-t">${t[1]}</div><div class="muted" style="font-size:14px">${ru<1?`Rusting −${Math.round((1-ru)*100)}% · one session clears it`:`Work on: ${PARTS.find(p=>p[0]===weakest(R.parts))[1].toLowerCase()}`}</div></span><span class="chev">${IC.chev}</span></button>`;}
+
+function vReady(){const R=ready(),t=tier(R.score),ru=rust(),wk=weakest(R.parts),hp=hasPron(),nextT=TIERS.find(x=>x[0]>R.score);
+ return`<div class="screen"><div class="top"><button class="icon-btn" data-act="home" aria-label="Back">${IC.back}</button><h1>Street Ready</h1></div>
+ <div class="card ready-hero">${gauge(R.score,150)}<div class="rh-t">${t[1]}</div><div class="muted">${t[2]}${nextT?` · ${nextT[1]} at ${nextT[0]}`:""}</div>
+ ${ru<1?`<div class="rust">Rust −${Math.round((1-ru)*100)}% from missed days. One session clears it.</div>`:""}</div>
+ <div class="card">${PARTS.map(([k,l,d])=>{const off=k==="pron"&&!hp,v=Math.round(R.parts[k]*100);return`<div class="part"><div class="pk"><b>${l}</b><span>${off?"no mic checks yet":v+"%"}</span></div><div class="mini"><i style="width:${off?0:v}%;background:${k===wk?"var(--accent)":"var(--good)"}"></i></div><div class="pd">${d}</div></div>`;}).join("")}
+ <div class="tip" style="margin:6px 0 0"><b>Biggest boost now:</b> ${TIPS[wk]}</div></div>
+ <div class="label">Passport · ${Object.keys(S.stamps).length} of 12 stamps</div>
+ <div class="passport">${UNITS.map((u,i)=>{const st=S.stamps[u.id];return`<button class="stamp ${st?"on":""}" data-act="dlg" data-arg="${u.id}" data-from="ready" style="--rot:${[-8,5,-3,7,-6,3][i%6]}deg"><span class="sn">${i+1}</span><span class="st">${esc(u.title)}</span>${st?`<span class="sd">${new Date(st.d+"T12:00:00").toLocaleDateString(undefined,{month:"short",day:"numeric"})}</span>`:""}</button>`;}).join("")}</div>
+ <div class="muted" style="font-size:13px;margin:8px 4px 0">Tap a stamp to open its dialogue. To earn it, role-play start to finish with English off and no peeking.</div>
+ <div class="label">Situations</div>
+ ${UNITS.map((u,i)=>{const sc=R.units[i].score;return`<button class="list-item" data-act="unit" data-arg="${u.id}"><span class="num ${sc>=80?"done":""}">${sc}</span><span class="grow"><div class="t">${esc(u.sit)}</div><div class="s">${esc(u.title)}${S.stamps[u.id]?" · stamped":""}</div><div class="mini"><i style="width:${sc}%"></i></div></span><span class="chev">${IC.chev}</span></button>`;}).join("")}
  </div>${tabbar()}`;}
 
 function vLearn(){return`<div class="screen"><div class="top"><h1>Learn</h1></div>
@@ -612,9 +677,9 @@ function vDialog(){const u=UBYID[ui.dlg],d=u.d,dl=ui.dl,rp=dl.rp;
  if(rp){lines=d.l.slice(0,rp.i+1).map((L,i)=>{
    if(L[0]===rp.me&&i===rp.i&&!rp.done){return`<div class="bub mine ${L[0]==="B"?"b":""}"><div class="who">You (${esc(who(L[0]))})</div><div class="es">${rp.revealed?esc(L[1]):"<span class='muted'>Say in Spanish:</span>"}</div><div class="en" style="font-size:16px;color:var(--ink)">${esc(L[2])}</div>
      <div class="fb ${rp.fb?"show "+rp.fb.cls:""}" style="margin-top:8px">${rp.fb?rp.fb.html:""}</div>
-     <div class="ctrls">${SR?`<button class="ctrl mic" data-act="rpmic">${IC.mic}Speak</button>`:""}${rp.revealed?`<button class="ctrl" data-act="rpnext">Continue</button>`:`<button class="ctrl" data-act="rpreveal">${IC.eye}Show</button>`}</div></div>`;}
+     <div class="ctrls">${SR?`<button class="ctrl mic" data-act="rpmic">${IC.mic}Speak</button>`:""}${rp.revealed?(SR?`<button class="ctrl" data-act="rpnext">Continue</button>`:`<button class="ctrl" data-act="rpnext">I said it</button><button class="ctrl" data-act="rpmiss">Missed it</button>`):`<button class="ctrl" data-act="rpreveal">${IC.eye}${SR?"Show":"Check"}</button>`}</div></div>`;}
    return`<div class="bub ${L[0]==="B"?"b":""} ${i===rp.i&&L[0]!==rp.me?"now":""}"><div class="who">${L[0]===rp.me?"You":esc(who(L[0]))}</div><div class="es">${esc(L[1])}</div>${dl.en?`<div class="en">${esc(L[2])}</div>`:""}</div>`;}).join("");
-  if(rp.done)lines+=`<div class="card" style="text-align:center;margin-top:10px"><h2>¡Bien hecho!</h2><p class="muted">You held up your end of the conversation.</p><div class="row"><button class="btn btn-soft" data-act="rpstart" data-arg="${rp.me==="A"?"B":"A"}">Swap roles</button><button class="btn btn-primary" data-act="rpexit">Done</button></div></div>`;}
+  if(rp.done)lines+=`<div class="card" style="text-align:center;margin-top:10px">${rp.earned?`<div class="stamp on" style="width:112px;margin:4px auto 14px;--rot:-8deg"><span class="sn">${UNITS.indexOf(u)+1}</span><span class="st">${esc(u.title)}</span><span class="sd">${new Date().toLocaleDateString(undefined,{month:"short",day:"numeric"})}</span></div><h2>${rp.newStamp?"Stamp earned!":"Stamped again!"}</h2><p class="muted">No peeking, no English. That's street ready.</p>`:`<h2>¡Bien hecho!</h2><p class="muted">You held up your end of the conversation.<br>No stamp yet: ${esc(rp.why)}.</p>`}<div class="row"><button class="btn btn-soft" data-act="rpstart" data-arg="${rp.me==="A"?"B":"A"}">Swap roles</button><button class="btn btn-primary" data-act="rpexit">Done</button></div></div>`;}
  else{lines=d.l.map((L,i)=>`<button class="bub ${L[0]==="B"?"b":""} ${dl.playing===i?"now":""}" data-act="line" data-arg="${i}"><div class="who">${esc(who(L[0]))}</div><div class="es">${esc(L[1])}</div>${dl.en?`<div class="en">${esc(L[2])}</div>`:""}</button>`).join("");}
  return`<div class="screen"><div class="top"><button class="icon-btn" data-act="back" aria-label="Back">${IC.back}</button><h1 style="font-size:23px">${esc(d.title)}</h1></div>
  <div class="scene">${esc(d.a)} & ${esc(d.b)} · Unit ${UNITS.indexOf(u)+1}: ${esc(u.title)}</div>
@@ -629,6 +694,7 @@ function vMe(){const cards=Object.values(S.cards);const strong=cards.filter(c=>c
  const mx=Math.max(5,...days.map(d=>d.v));const vs=ranked();const cur=mainVoice();
  return`<div class="screen"><div class="top"><h1>Progress</h1></div>
  <div class="grid3"><div class="stat"><b>${st}</b><span>day streak</span></div><div class="stat"><b>${cards.length}</b><span>phrases learned</span></div><div class="stat"><b>${strong}</b><span>long-term</span></div></div>
+ ${(()=>{const sc=ready().score;return`<button class="list-item" data-act="nav" data-arg="ready" style="margin-top:14px">${gauge(sc,48)}<span class="grow"><div class="t">Street Ready · ${tier(sc)[1]}</div><div class="s">Situations, passport & what to work on</div></span><span class="chev">${IC.chev}</span></button>`;})()}
  <div class="card" style="margin-top:14px"><div style="font-weight:700">This week</div><div class="muted" style="font-size:13px">Phrases practiced per day</div>
  <div class="week">${days.map(d=>`<div class="col"><div class="bar ${d.v?"":"zero"}" style="height:${Math.max(4,d.v/mx*80)}px" title="${d.v}"></div><div class="d">${d.l}</div></div>`).join("")}</div></div>
 
@@ -706,15 +772,16 @@ function vDone(){const s=ui.session,t=s.st;const st=streakNow();
  <h2>${msgs[Math.floor(Math.random()*msgs.length)]}</h2>
  <p class="muted" style="margin:0">${s.mode==="practice"?"Practice complete.":"Session complete — "+st+" day streak."}</p>
  <div class="stats"><div class="stat"><b>${t.learned}</b><span>new</span></div><div class="stat"><b>${t.rev}</b><span>recalled</span></div><div class="stat"><b>${t.spoken}</b><span>spoken checks</span></div></div>
+ ${(()=>{const a=ready().score,d=a-(s.before||0);return`<button class="card ready-card" data-act="nav" data-arg="ready" style="margin:0">${gauge(a,72)}<span class="grow"><div class="label" style="margin:0 0 2px">Street Ready</div><div class="rc-t">${tier(a)[1]}</div><div class="muted" style="font-size:14px">${d>0?"+"+d+" this session":"Holding steady. Keep the reps coming"}</div></span><span class="chev">${IC.chev}</span></button>`;})()}
  <div class="tip" style="text-align:left;margin-top:6px"><b>Bonus rep:</b> play a dialogue and role-play it — it's the closest thing to a real conversation.</div>
  </main><footer class="sfoot"><button class="btn btn-soft" data-act="dlg" data-arg="${(s.unitId)||(nextUnit()||UNITS[0]).id}" data-from="today">Open a dialogue</button><button class="btn btn-primary" data-act="home">Back home</button></footer></div>`;}
 
 /* ---------------- RENDER ---------------- */
 function go(v){stopAll();if(v!=="dialog"){ui.dl.playing=-1;ui.dl.rp=null;}ui.view=v;render();window.scrollTo(0,0);}
 function render(){
- const V={today:vToday,learn:vLearn,unit:vUnit,listen:vListen,dialog:vDialog,me:vMe,session:vSession,onboard:vOnboard}[ui.view]||vToday;
+ const V={today:vToday,ready:vReady,learn:vLearn,unit:vUnit,listen:vListen,dialog:vDialog,me:vMe,session:vSession,onboard:vOnboard}[ui.view]||vToday;
  $("#app").innerHTML=V();
- if(ui.view==="session"){const s=ui.session,st=s.steps[s.i];
+ if(ui.view==="session"){const s=ui.session,st=s.steps[s.i];if(st&&s.t0i!==s.i){s.t0i=s.i;s.t0=Date.now();s.lat=null;}
   if(st&&!s.played&&(st.t==="intro"||st.t==="listen")){s.played=true;speak(BYID[st.id].es);}}
 }
 
@@ -726,7 +793,7 @@ async function playDialog(from=0){const d=UBYID[ui.dlg].d;const tok=++playTok;
  ui.dl.playing=-1;render();}
 function scrollNow(){const el=document.querySelector(".bub.now,.bub.mine");if(el)el.scrollIntoView({block:"center",behavior:"smooth"});}
 async function rpStep(){const d=UBYID[ui.dlg].d,rp=ui.dl.rp;if(!rp)return;
- if(rp.i>=d.l.length){rp.done=true;rp.i=d.l.length-1;render();scrollNow();return;}
+ if(rp.i>=d.l.length){rp.done=true;rp.i=d.l.length-1;judgeStamp(rp);render();scrollNow();return;}
  const L=d.l[rp.i];rp.revealed=false;rp.fb=null;render();scrollNow();
  if(L[0]!==rp.me){const tok=++playTok;await sayLine(L);if(tok!==playTok||ui.dl.rp!==rp)return;await sleep(300);if(tok!==playTok)return;rp.i++;rpStep();}}
 
@@ -754,25 +821,26 @@ document.addEventListener("click",async e=>{
  case"home":go("today");break;
  case"say":speak(BYID[arg].es);break;
  case"sayslow":speak(BYID[arg].es,{rate:Math.max(0.5,S.settings.rate-0.3)});break;
- case"mic":{const p=BYID[arg];runMic(b,p.es,r=>{s.fb=r;if(r.score>0)s.st.spoken++;
+ case"mic":{const p=BYID[arg];if(s.steps[s.i].t==="recall"&&!s.revealed&&s.lat==null&&!listenStop)s.lat=Date.now()-s.t0;runMic(b,p.es,r=>{s.fb=r;if(r.score>0){s.st.spoken++;const c=S.cards[p.id];if(c){c.ms=ema(c.ms,r.score);save();}}
    if(s.steps[s.i].t==="recall"&&!s.revealed&&r.score>=60){s.revealed=true;render();speak(p.es);}else{const f=$("#fb");if(f){f.className="fb show "+r.cls;f.innerHTML=r.html;}}});break;}
  case"gotit":{const st=s.steps[s.i];if(s.mode!=="practice"){newCard(st.id);s.st.learned++;save();}stepNext();break;}
- case"reveal":stopAll();s.revealed=true;render();speak(BYID[s.steps[s.i].id].es);break;
- case"grade":{const g=+arg,st=s.steps[s.i];
+ case"reveal":stopAll();if(s.steps[s.i].t==="recall"&&s.lat==null)s.lat=Math.max(0,Date.now()-s.t0-1500);s.revealed=true;render();speak(BYID[s.steps[s.i].id].es);break;
+ case"grade":{const g=+arg,st=s.steps[s.i];{const c=S.cards[st.id];if(c){if(st.t==="recall")c.lt=ema(c.lt,g===0||s.lat==null?10000:s.lat);if(st.t==="listen")c.lc=ema(c.lc,g>=2?1:0);save();}}
   if(s.mode!=="practice"&&S.cards[st.id]){applyGrade(st.id,g);hist().rev++;markActive();save();}
   s.st.rev++;if(g===0){s.st.again++;s.steps.splice(Math.min(s.i+4,s.steps.length),0,{t:"recall",id:st.id});}
   stepNext();break;}
  case"quit":stopAll();if(s&&s.i>0&&s.i<s.steps.length&&!confirm("End this session? Your progress so far is saved."))return;go("today");break;
- case"en":ui.dl.en=!ui.dl.en;render();break;
+ case"en":ui.dl.en=!ui.dl.en;if(ui.dl.rp&&ui.dl.en)ui.dl.rp.en=true;render();break;
  case"slowtoggle":S.settings.rate=S.settings.rate<0.8?0.9:0.7;save();render();toast(S.settings.rate<0.8?"Slow speech on":"Normal speed");break;
  case"line":stopAudio();ui.dl.playing=+arg;render();{const tok=playTok;await sayLine(UBYID[ui.dlg].d.l[+arg]);if(tok===playTok){ui.dl.playing=-1;render();}}break;
  case"playdlg":playDialog(0);break;
  case"stopdlg":stopAudio();ui.dl.playing=-1;render();break;
- case"rpstart":stopAudio();ui.dl.playing=-1;ui.dl.rp={me:arg,i:0,revealed:false,fb:null,done:false};rpStep();break;
+ case"rpstart":stopAudio();ui.dl.playing=-1;ui.dl.rp={me:arg,i:0,revealed:false,fb:null,done:false,peeks:0,en:ui.dl.en,ls:{}};rpStep();break;
  case"rpexit":stopAll();ui.dl.rp=null;render();break;
- case"rpreveal":{stopAll();const rp=ui.dl.rp;rp.revealed=true;render();sayLine(UBYID[ui.dlg].d.l[rp.i]);break;}
+ case"rpreveal":{stopAll();const rp=ui.dl.rp;if(SR)rp.peeks++;rp.revealed=true;render();sayLine(UBYID[ui.dlg].d.l[rp.i]);break;}
+ case"rpmiss":{stopAll();const rp=ui.dl.rp;rp.peeks++;rp.i++;rpStep();break;}
  case"rpnext":{stopAll();const rp=ui.dl.rp;rp.i++;rpStep();break;}
- case"rpmic":{const rp=ui.dl.rp,L=UBYID[ui.dlg].d.l[rp.i];runMic(b,L[1],r=>{rp.fb=r;if(r.score>=60)rp.revealed=true;render();if(rp.revealed)sayLine(L);});break;}
+ case"rpmic":{const rp=ui.dl.rp,L=UBYID[ui.dlg].d.l[rp.i];runMic(b,L[1],r=>{rp.fb=r;if(r.score>0)rp.ls[rp.i]=r.score;if(r.score>=60)rp.revealed=true;render();if(rp.revealed)sayLine(L);});break;}
  case"accent":S.settings.accent=arg;S.settings.voice="";save();render();speak(arg==="spain"?"¡Hola! ¿Qué tal?":"¡Hola! ¿Cómo estás?");break;
  case"newper":S.settings.newPerDay=+arg;save();render();break;
  case"testvoice":speak("¡Hola! Vamos a aprender español juntos.");if(TTS.ok&&!TTS.voices.length)setTimeout(()=>{loadVoices();if(!TTS.voices.length)toast("No Spanish voice found — see Progress → Settings.");},800);break;
